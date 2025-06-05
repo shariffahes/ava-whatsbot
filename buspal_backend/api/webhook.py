@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Header, HTTPException
-from buspal_backend.models.webhook_payload import WebhookPayload
-from buspal_backend.services.message_handler import MessageHandler
+from models.webhook_payload import WebhookPayload
+from services.webhooks.message_handler import MessageHandler
 
 router = APIRouter()
 

@@ -1,7 +1,8 @@
-from .base import WebhookHandler
-from .gemini_service import GeminiService
-from .whatsapp_service import WhatsappService
+from base import WebhookHandler
+from services.ai.gemini import GeminiService
+from services.whatsapp import WhatsappService
 import os
+
 class MessageHandler(WebhookHandler):
     def __init__(self):
         self.gemini_service = GeminiService()

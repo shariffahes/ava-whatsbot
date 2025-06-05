@@ -20,7 +20,7 @@ class WhatsappService():
       }
 
       try:
-        await asyncio.sleep(random.uniform(0.5, 1)) 
+        await asyncio.sleep(random.uniform(0.2, 0.6)) 
         response = requests.post(f"{self.api_url}/client/sendPresenceAvailable/{os.environ.get('SESSION_NAME')}", json=payload, headers=headers)
         
         await asyncio.sleep(random.uniform(1, 3)) 
