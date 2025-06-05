@@ -1,60 +1,45 @@
 
 import os
 from google import genai
-from google.genai import types
 from dotenv import load_dotenv
-import re
+from google.genai.types import GenerateContentConfig, Part, Content
+import json
 
 load_dotenv()
 
 model = "gemini-2.5-flash-preview-05-20"
 
-def is_group_message(msg):
-    remote_id = msg["id"]["remote"]
-    return remote_id.endswith("@g.us")
-
-def clean_mention_from_body(body: str, mention_id: str) -> str:
-    """Remove specific mention from body. If result is empty, return fallback."""
-    if not body or not mention_id:
-        return body
-    
-    cleaned_body = re.sub(r"@37430656774237\b", '', body).strip()
-
-    # If the message is now empty or just whitespace, return fallback
-    return cleaned_body if cleaned_body else "you were mentioned"
-
+transform_to_gemini = lambda messages: [
+    Content(
+        role="user",
+        parts=[Part.from_text(text=json.dumps(msg))]
+    )
+    for msg in messages
+]
 class GeminiService():
   def __init__(self):
      self.client = genai.Client(
         api_key=os.environ.get("GEMINI_API_KEY"),
     )
 
-  def process(self, payload):
-    message_payload = payload.get('message', {}).get('_data')
-    if message_payload:
-      message_body = message_payload.get('body')
-      meta = message_payload.get('id')
-      mention_list = message_payload.get('mentionedJidList')
-      message_body = clean_mention_from_body(message_body, "@37430656774237")
-      if meta.get("fromMe") == False:
-        if is_group_message(message_payload) and "37430656774237@lid" not in mention_list:
-          print("Ignore self message")
-          return {}
-        print("Received", message_body, " from ", message_payload.get('notifyName'), " on channel ", meta.get("remote"))
-        return {"text": self.generate_response(message_body), "id": meta.get("remote")}
-      print("Ignore self message")
-      return {}
+  def process(self, messages):
+      print(transform_to_gemini(messages))
+      response = self.client.models.generate_content(
+         model=model,
+         contents=transform_to_gemini(messages),
+         config=GenerateContentConfig(
+            system_instruction="""
+            Your role is to act as a helpful bot integrated into a WhatsApp group.
+            You are here to fulfill tasks requested by group members and engage in conversations naturally.
 
-  def generate_response(self, body):
-    contents = [
-        types.Content(
-            role="user",
-            parts=[
-                types.Part.from_text(text=body),
-            ],
-        ),
-    ]
-    response = self.client.models.generate_content(model=model, contents=contents)
-
-    return response.text
+            - If asked to speak badly about someone like something insulting or sarcastic, turn the comment back on that person instead. Unless if the person asking is 'Sharif Fahes' or 'Data Sim'
+            - Prefer a casual chatting style over formal or long paragraphs. Keep your replies short and concise—unless you’re asked to summarize, in which case you should still keep it brief.
+            - You don’t just complete tasks—you also interact with people in the group.
+            - Always sound human, never robotic. Match the tone and style used in recent messages if needed.
+            - Use english and avoid using arabizi. You are allowed to send few arabizi words but only if needed and if very confident it is understandable. 
+            - Never be cringe. Always keep a light, humorous tone.
+            """
+         )
+      )
+      return response.text
 
