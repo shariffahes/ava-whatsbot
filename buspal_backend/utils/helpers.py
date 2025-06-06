@@ -3,6 +3,7 @@ import os
 import json
 from typing import Any
 from buspal_backend.models.user import UserModel
+from buspal_backend.models.group import GroupModel
 import re
 
 base_url = os.getenv('WHATSAPP_API_URL')
@@ -11,12 +12,12 @@ headers = {
     "Content-Type": "application/json"
 }
 
-def fetch_messages(chat_id: str):
+def fetch_messages(chat_id: str, n: int):
     try:
         data = {
             "chatId": chat_id,
             "searchOptions": {
-                "limit": 15
+                "limit": n
             }
         }
         result = requests.post(f"{base_url}/chat/fetchMessages/{session_name}", data=json.dumps(data), headers=headers)
@@ -27,16 +28,30 @@ def fetch_messages(chat_id: str):
     except Exception as e:
         print("Failed to fetch messages: ", e)
 
-def get_user_by(id: str):
+def get_user_by(id: str, is_group: bool = False):
     try:
+        res = None
+        #Try to find it from db
+        if is_group:
+           res = GroupModel.get_by_id(id)
+        else:
+          res = UserModel.get_by_id(id)
+
+        if res is not None:
+           return res
+      
         data = { "contactId": id }
         result = requests.post(f"{base_url}/contact/getClassInfo/{session_name}", data=json.dumps(data), headers=headers)
         if result.status_code == 200:
           response = result.json()
           contact_info = response.get('result')
           name = contact_info.get('name')
-          user = UserModel.create(wa_id=id, name=name)
-          return user
+          res = None
+          if is_group:
+            res = GroupModel.create(id, name)
+          else:
+            res = UserModel.create(wa_id=id, name=name)
+          return res
     except Exception as e:
         print("Failed to get contact: ", e)
 

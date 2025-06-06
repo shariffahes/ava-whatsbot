@@ -13,5 +13,5 @@ async def receive_webhook(payload: WebhookPayload, x_api_key: str = Header(None)
     if not handler:
         return {"status": "not handled"}
     
-    await handler.handle(payload.sessionId, payload.data)
+    await handler.handle(payload.data)
     return {"status": "processed"}

@@ -2,12 +2,18 @@
 import os
 from google import genai
 from dotenv import load_dotenv
-from google.genai.types import GenerateContentConfig, Part, Content
+from google.genai.types import GenerateContentConfig, Part, Content, Tool, GoogleSearch, UrlContext
 import json
 
 load_dotenv()
 
 model = "gemini-2.5-flash-preview-05-20"
+google_search_tool = Tool(
+    google_search = GoogleSearch()
+)
+url_context_tool = Tool(
+    url_context = UrlContext
+)
 
 transform_to_gemini = lambda messages: [
     Content(
@@ -23,7 +29,6 @@ class GeminiService():
     )
 
   def process(self, messages):
-      print(transform_to_gemini(messages))
       response = self.client.models.generate_content(
          model=model,
          contents=transform_to_gemini(messages),
@@ -38,7 +43,8 @@ class GeminiService():
             - Always sound human, never robotic. Match the tone and style used in recent messages if needed.
             - Use english and avoid using arabizi. You are allowed to send few arabizi words but only if needed and if very confident it is understandable. 
             - Never be cringe. Always keep a light, humorous tone.
-            """
+            """,
+            tools=[google_search_tool, url_context_tool]
          )
       )
       return response.text
