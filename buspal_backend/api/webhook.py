@@ -5,13 +5,13 @@ from buspal_backend.services.webhooks.message_handler import MessageHandler
 router = APIRouter()
 
 # Handler registry
-handler_map = {"message": MessageHandler() }
+handler_map = {"message": MessageHandler(), "message_create": MessageHandler() }
 
 @router.post("/webhook/incoming")
 async def receive_webhook(payload: WebhookPayload, x_api_key: str = Header(None)):
     handler = handler_map.get(payload.dataType)
     if not handler:
         return {"status": "not handled"}
-    
-    await handler.handle(payload.data)
+    print("payload ", payload.dataType)
+    await handler.handle(payload.data, payload.dataType)
     return {"status": "processed"}

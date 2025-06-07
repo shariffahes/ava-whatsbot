@@ -4,10 +4,12 @@ from google import genai
 from dotenv import load_dotenv
 from google.genai.types import GenerateContentConfig, Part, Content, Tool, GoogleSearch, UrlContext
 import json
+import base64
 
 load_dotenv()
 
 model = "gemini-2.5-flash-preview-05-20"
+
 google_search_tool = Tool(
     google_search = GoogleSearch()
 )
@@ -15,13 +17,29 @@ url_context_tool = Tool(
     url_context = UrlContext
 )
 
-transform_to_gemini = lambda messages: [
-    Content(
-        role="user",
-        parts=[Part.from_text(text=json.dumps(msg))]
-    )
-    for msg in messages
-]
+def transform_to_gemini(messages):
+    contents = []
+    for msg in messages:
+        parts = []
+        media_content = None
+
+        if "base64" in msg:
+            media_content = msg
+        elif msg.get("reply_to") and "base64" in msg["reply_to"]:
+            media_content = msg["reply_to"]
+
+        if media_content:
+            mime_type = media_content['mimeType']
+            data = base64.b64decode(media_content['base64'])
+            parts.append(Part.from_bytes(mime_type=mime_type, data=data))
+            caption = msg.get("message", "")
+            if caption:
+                parts.append(Part.from_text(text=caption))
+        else:
+            parts.append(Part.from_text(text=json.dumps(msg)))
+        contents.append(Content(role="user", parts=parts))
+
+    return contents
 class GeminiService():
   def __init__(self):
      self.client = genai.Client(

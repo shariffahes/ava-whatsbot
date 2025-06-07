@@ -1,9 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-import os
 from datetime import datetime
 from buspal_backend.api import webhook
+import httpx
+import uvicorn
+import os
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -35,17 +36,26 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {
-        "status": "healthy",
+        "status": "healthy :)",
         "timestamp": datetime.now().isoformat()
     }
 
+@app.get("/ping-google")
+async def ping_google():
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.get("https://www.google.com")
+            return {"status": "Internet OK", "code": response.status_code}
+    except Exception as e:
+        return {"status": "Internet Failed", "error": str(e)}
+
 app.include_router(webhook.router)
 
-# if __name__ == "__main__":
-#     uvicorn.run(
-#         "main:app",
-#         host="127.0.0.1",
-#         port=int(os.getenv("PORT", 8000)),
-#         reload=True,
-#         log_level="info"
-#     )
+if __name__ == "__main__":
+    uvicorn.run(
+        "main:app",
+        host="127.0.0.1",
+        port=int(os.getenv("PORT", 8000)),
+        reload=True,
+        log_level="info"
+    )
