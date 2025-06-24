@@ -3,15 +3,17 @@ import os
 import json
 from typing import Any
 from buspal_backend.models.user import UserModel
-from buspal_backend.models.group import GroupModel
+from buspal_backend.models.conversation import ConversationModel
 import re
+import pytz
+from datetime import datetime
 
 base_url = os.getenv('WHATSAPP_API_URL')
 session_name = os.getenv('SESSION_NAME')
 headers = {
     "Content-Type": "application/json"
 }
-supported_media = ['image', 'sticker']
+supported_media = ['image', 'sticker', 'video']
 
 def fetch_messages(chat_id: str, n: int):
     try:
@@ -39,12 +41,12 @@ def download_media(chat_id: str, message_id: str):
          return {"mimeType": result['messageMedia']['mimetype'], "base64": result['messageMedia']['data']}
       return {}
 
-def get_user_by(id: str, is_group: bool = False):
+def get_user_by(id: str, fetch_convo: bool = False):
     try:
         res = None
         #Try to find it from db
-        if is_group:
-           res = GroupModel.get_by_id(id)
+        if fetch_convo:
+           res = ConversationModel.get_by_id(id)
         else:
           res = UserModel.get_by_id(id)
 
@@ -58,8 +60,8 @@ def get_user_by(id: str, is_group: bool = False):
           contact_info = response.get('result')
           name = contact_info.get('name')
           res = None
-          if is_group:
-            res = GroupModel.create(id, name)
+          if fetch_convo:
+            res = ConversationModel.create(id, name)
           else:
             res = UserModel.create(wa_id=id, name=name)
           return res
@@ -77,7 +79,8 @@ def parse_wa_message(message: dict[str:Any], skip_media: bool = False, is_dm: bo
         sender_id = sender_id.get('_serialized')
 
     media_content = {}
-    wa_message = {"sender": sender_id}
+
+    wa_message = {"sender": sender_id, "date": epoch_to_beirut(message.get('t', None))}
     if skip_media == False and message.get('type') in supported_media:
         chat_id = message['id']['remote']
         message_id = message['id']['id']
@@ -98,3 +101,21 @@ def parse_wa_message(message: dict[str:Any], skip_media: bool = False, is_dm: bo
 
 def clean_mentions(message: str) -> str:
     return re.sub(r"@\d+", "", message).strip()
+
+def current_time_in_beirut():
+    utc_now = datetime.utcnow().replace(tzinfo=pytz.utc)
+    beirut = pytz.timezone("Asia/Beirut")
+    beirut_now = utc_now.astimezone(beirut)
+    return beirut_now
+
+
+def epoch_to_beirut(epoch_timestamp, format_string='%Y-%m-%d %H:%M:%S %Z'):
+    if epoch_timestamp is None:
+        beirut_tz = pytz.timezone('Asia/Beirut')
+        return datetime.now(beirut_tz).strftime(format_string)
+    utc_dt = datetime.fromtimestamp(epoch_timestamp, tz=pytz.UTC)
+    
+    beirut_tz = pytz.timezone('Asia/Beirut')
+    beirut_dt = utc_dt.astimezone(beirut_tz)
+    
+    return beirut_dt.strftime(format_string)

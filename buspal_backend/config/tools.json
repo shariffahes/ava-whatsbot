@@ -1,0 +1,35 @@
+[
+  {
+     "name": "search_google",
+     "description": "Search Google for information or extract URL context information.",
+     "parameters": {
+         "type": "object",
+         "properties": {
+             "query": {
+                 "type": "string",
+                 "description": "The search query with the URL to extract context from."
+             }
+         },
+         "required": ["query"]
+     }
+ },
+  {
+     "name": "send_reaction",
+     "description": "Send a reaction (GIF or sticker) to express emotion, humor, or attitude when it fits naturally into the conversation. Use it when something is funny, dramatic, cute, or deserves a vibe check.",
+     "parameters": {
+         "type": "object",
+         "properties": {
+             "query": {
+                 "type": "string",
+                 "description": "A descriptive prompt for the reaction you want to send. Think of popular meme references, facial expressions, vibes, or keywords like 'facepalm', 'slow clap', or 'Michael Scott no'."
+             },
+             "reaction_type": {
+                "type": "string",
+                "enum": ["GIF", "STICKER"],
+                "description": "Specify whether the reaction should be a GIF or a sticker. Use stickers for punchy, expressive vibes, and GIFs for animated emotional responses. Decide intelligently between them"
+             }
+         },
+         "required": ["query", "reaction_type"]
+     }
+  }
+]

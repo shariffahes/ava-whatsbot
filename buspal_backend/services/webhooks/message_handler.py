@@ -1,20 +1,25 @@
 from buspal_backend.services.webhooks.base import WebhookHandler
 from buspal_backend.services.ai.gemini import GeminiService
 from buspal_backend.services.whatsapp import WhatsappService
+from buspal_backend.models.conversation import ConversationModel
 from buspal_backend.utils.helpers import fetch_messages, parse_wa_message, get_user_by
 from typing import Dict, List, Optional, Any
+from rapidfuzz import fuzz, process
 import os
 import logging
+import json
+import asyncio
 
 logger = logging.getLogger(__name__)
 class MessageHandler(WebhookHandler):
     """Handles incoming WhatsApp messages and processes them with AI services."""
     
     # Constants
-    DEFAULT_MESSAGE_COUNT = 0
-    BOT_REPLY_MESSAGE_COUNT = 10
+    DEFAULT_MESSAGE_COUNT = 1
+    BOT_REPLY_MESSAGE_COUNT = 20
     BUSINESS_REPLY_MESSAGE_COUNT = 30
-    BOT_TRIGGER = "@bot"
+    BOT_TRIGGER = ["@bot", "@Bot", "@BOT"]
+    # BOT_TRIGGER = ["@local"]
     BUSINESS_TRIGGER = "@business"
     GROUP_SUFFIX = "@g.us"
   
@@ -27,7 +32,7 @@ class MessageHandler(WebhookHandler):
         except Exception as e:
           logger.error(f"Failed to initialize MessageHandler: {e}")
           raise
-    
+
     async def handle(self, data: Dict[str, Any], type) -> Dict[str, str]:
         """
         Handle incoming webhook data and process WhatsApp messages.
@@ -40,6 +45,7 @@ class MessageHandler(WebhookHandler):
         """
         try:
           message_data = self._extract_message_data(data)
+          print(type, "\n")
           if type == 'message_create':
               me = message_data.get("id", {}).get("fromMe")
               if not me:
@@ -53,19 +59,17 @@ class MessageHandler(WebhookHandler):
             return {"status": "no_message_data"}
           
           remote_id = message_data.get('id').get("remote")
-          if not remote_id:
+          if not remote_id or remote_id == "status@broadcast":
+            print("ignored ", remote_id)
             logger.warning("No sender ID found in message data")
             return {"status": "no_sender"}
-          
-          # Only process group messages
-          # if not self._is_group_message(remote_id):
-          #   logger.debug(f"Ignoring non-group message from {remote_id}")
-          #   return {"status": "not_group_message"}
           
           await self._process_group_message(message_data, remote_id)
           return {"status": "processed"}
             
         except Exception as e:
+          self.whatsapp_client.stop_typing(remote_id)
+          self.whatsapp_client.go_offline(remote_id)
           logger.error(f"Error handling webhook data: {e}", exc_info=True)
           return {"status": "error"}
 
@@ -76,13 +80,17 @@ class MessageHandler(WebhookHandler):
         return remote_id.endswith(self.GROUP_SUFFIX)
     
     def _is_bot_reply_requested(self, message_body: str) -> bool:
-        return self.BOT_TRIGGER in message_body
+        _, score, _ = process.extractOne(message_body, self.BOT_TRIGGER, scorer=fuzz.partial_ratio)
+        return score >= 75
+    
+    def _is_business_reply_requested(self, message_body: str) -> bool:
+        return self.BUSINESS_TRIGGER in message_body
     
     async def _process_group_message(self, message_data: Dict[str, Any], remote_id: str) -> None:
         """Process a group message and handle bot replies or message storage."""
         message_body = message_data.get('caption', '') if message_data.get('type') == 'image' else message_data.get('body', '')
         bot_reply_requested = self._is_bot_reply_requested(message_body)
-        business_reply_requested = self.BUSINESS_TRIGGER in message_body
+        business_reply_requested = self._is_business_reply_requested(message_body)
         message_count = (
             self.BOT_REPLY_MESSAGE_COUNT if bot_reply_requested 
             else self.BUSINESS_REPLY_MESSAGE_COUNT if business_reply_requested 
@@ -100,11 +108,12 @@ class MessageHandler(WebhookHandler):
             logger.warning(f"No messages found for {remote_id}")
             return
         if bot_reply_requested:
+            await self.whatsapp_client.go_online_and_type(remote_id)
             await self._handle_bot_reply(remote_id, messages)
         elif business_reply_requested:
+            await self.whatsapp_client.go_online_and_type(remote_id)
             await self._handle_business_reply(remote_id, messages)
-        else:
-            self._handle_message_storage(remote_id, messages)
+        asyncio.create_task(self._handle_message_storage(remote_id, messages))
     
     def _fetch_and_format_messages(self, remote_id: str, count: int, is_business: bool = False) -> List[Dict[str, Any]]:
         """Fetch and format recent messages from the group."""
@@ -123,11 +132,11 @@ class MessageHandler(WebhookHandler):
                             continue
                         else:
                             break
-                skip_media = True if is_business == False and idx < 5 else False
+                skip_media = True if is_business == False and idx < self.BOT_REPLY_MESSAGE_COUNT - 5 else False
                 formatted_msg = self._format_message(message_data, skip_media, is_group=self._is_group_message(remote_id))
                 if formatted_msg:
                     formatted_messages.append(formatted_msg)
-            print(formatted_messages)
+            # print(formatted_messages)
             logger.debug(f"Formatted {len(formatted_messages)} messages for {remote_id}")
             return formatted_messages
             
@@ -183,13 +192,20 @@ class MessageHandler(WebhookHandler):
       """Handle bot reply generation and sending."""
       try:
         logger.info(f"Generating bot reply for {remote_id}")
-        response_text = self.gemini_service.process(messages)
-        
-        if response_text:
-            await self.whatsapp_client.send_message(remote_id, response_text)
-            logger.info(f"Bot reply sent to {remote_id}")
-        else:
-            logger.warning(f"Empty response from Gemini service for {remote_id}")
+        conversation = ConversationModel.get_by_id(remote_id)
+        context = None
+        if conversation and len(conversation['summaries']) > 0:
+            last_15_summaries = '\n'.join(f"{json.dumps(summary)}" for summary in conversation['summaries'][-15:])
+            context = f"#History:\n{last_15_summaries}"
+        response = await self.gemini_service.process(messages, context)
+
+        if response.get('text', None):
+          await self.whatsapp_client.send_message(remote_id, response.get('text', ''))
+        if response.get('media', None) and response['media'].get('url', None):
+          url = response['media']['url']
+          media_type = response['media']['type']
+          await self.whatsapp_client.send_message(remote_id, url, media_type)
+        logger.info(f"Bot reply sent to {remote_id}")
               
       except Exception as e:
           logger.error(f"Failed to generate or send bot reply to {remote_id}: {e}")
@@ -201,28 +217,30 @@ class MessageHandler(WebhookHandler):
           except Exception as send_error:
               logger.error(f"Failed to send error message: {send_error}")
     
-    def _handle_message_storage(self, remote_id: str, messages: List[Dict[str, Any]]) -> None:
+    async def _handle_message_storage(self, remote_id: str, messages: List[Dict[str, Any]]) -> None:
         """Handle message storage and potential summarization (commented out logic)."""
         try:
-            # This is where the commented summarization logic would go
-            # For now, just log that we would store the messages
-            logger.debug(f"Would store {len(messages)} messages for {remote_id}")
-            
-            # Uncomment and modify as needed:
-            # group = get_user_by(remote_id, True)
-            # if len(group.get("messages", [])) >= 3:
-            #     inference = InferenceService()
-            #     summary = inference.generate_content(group["messages"] + messages)
-            #     summaries = group.get("summaries", [])
-            #     summaries.append(summary)
-            #     GroupModel.update_by_id(remote_id, {
-            #         "summaries": summaries, 
-            #         "messages": []
-            #     })
-            # else:
-            #     existing_messages = group.get("messages", [])
-            #     existing_messages.extend(messages)
-            #     GroupModel.update_by_id(remote_id, {"messages": existing_messages})
+            conversation = get_user_by(remote_id, True)
+            if len(conversation.get("messages", [])) >= self.BOT_REPLY_MESSAGE_COUNT:
+                result = self.gemini_service.process_messages(conversation["messages"])
+                response = json.loads(result)
+                logger.debug(f"Summary generated for {remote_id}: {result}")
+                print("generated")
+                ConversationModel.update_by_id(remote_id, {
+                    "summaries": {
+                      "content": response.get('content'),
+                      "participants": response.get('participants'),
+                      "start_date": response.get('start_date'),
+                      "end_date": response.get('end_date')
+                    }
+                  }, "$push")
+                ConversationModel.update_by_id(remote_id, {"messages": []})
+            else:
+                last_index = len(messages) - 1
+                if last_index < 0:
+                    return
+                logger.debug(f"Add message for {remote_id}")
+                ConversationModel.update_by_id(remote_id, {"messages": messages[last_index]}, "$push")
             
         except Exception as e:
             logger.error(f"Error in message storage for {remote_id}: {e}")
