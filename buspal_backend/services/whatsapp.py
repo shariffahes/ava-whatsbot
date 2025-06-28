@@ -1,27 +1,66 @@
 
-import requests
+import aiohttp
 import os
 import asyncio
 import random
+from typing import Optional
+import logging
 
-headers = {
-    "Content-Type": "application/json",
-}
-
+logger = logging.getLogger(__name__)
+SESSION_NAME = os.environ.get('SESSION_NAME')
 class WhatsappService():
   def __init__(self, api_url: str):
       self.api_url = api_url
+      self._session: Optional[aiohttp.ClientSession] = None
+      self.timeout = aiohttp.ClientTimeout(total=30, connect=10)
+  
+  async def _get_session(self) -> aiohttp.ClientSession:
+      """Get or create aiohttp session with connection pooling"""
+      if self._session is None or self._session.closed:
+          connector = aiohttp.TCPConnector(
+              limit=100,  # Total connection pool size
+              limit_per_host=30,  # Per-host connection pool size
+              ttl_dns_cache=300,  # DNS cache TTL
+              use_dns_cache=True,
+          )
+          self._session = aiohttp.ClientSession(
+              connector=connector,
+              timeout=self.timeout,
+              headers={"Content-Type": "application/json"}
+          )
+      return self._session
+      
+  async def cleanup(self):
+      """Cleanup session resources"""
+      if self._session and not self._session.closed:
+          await self._session.close()
 
   async def go_online_and_type(self, id: str):
+      session = await self._get_session()
       payload = { "chatId": id }
-      requests.post(f"{self.api_url}/client/sendPresenceAvailable/{os.environ.get('SESSION_NAME')}", json=payload, headers=headers)
-      requests.post(f"{self.api_url}/chat/sendStateTyping/{os.environ.get('SESSION_NAME')}", json={"chatId": id}, headers=headers)
+      try:
+          async with session.post(f"{self.api_url}/client/sendPresenceAvailable/{SESSION_NAME}", json=payload) as response:
+              response.raise_for_status()
+          async with session.post(f"{self.api_url}/chat/sendStateTyping/{SESSION_NAME}", json={"chatId": id}) as response:
+              response.raise_for_status()
+      except aiohttp.ClientError as e:
+          logger.error(f"[WhatsappService] Failed to set online/typing status: {e}")
 
-  def stop_typing(self, id: str):
-      requests.post(f"{self.api_url}/chat/clearState/{os.environ.get('SESSION_NAME')}", json={"chatId": id}, headers=headers)
+  async def stop_typing(self, id: str):
+      session = await self._get_session()
+      try:
+          async with session.post(f"{self.api_url}/chat/clearState/{SESSION_NAME}", json={"chatId": id}) as response:
+              response.raise_for_status()
+      except aiohttp.ClientError as e:
+          logger.error(f"[WhatsappService] Failed to stop typing: {e}")
   
-  def go_offline(self, id: str):
-      requests.post(f"{self.api_url}/client/sendPresenceUnAvailable/{os.environ.get('SESSION_NAME')}", json={"chatId": id}, headers=headers)
+  async def go_offline(self, id: str):
+      session = await self._get_session()
+      try:
+          async with session.post(f"{self.api_url}/client/sendPresenceUnAvailable/{SESSION_NAME}", json={"chatId": id}) as response:
+              response.raise_for_status()
+      except aiohttp.ClientError as e:
+          logger.error(f"[WhatsappService] Failed to go offline: {e}")
         
   async def send_message(self, id: str, message: str, media_type: str = None):
       payload = {
@@ -38,15 +77,15 @@ class WhatsappService():
             "sendMediaAsSticker": True
         }
       
-      print(payload)
+      session = await self._get_session()
       try:
-        self.stop_typing(id) 
-        response = requests.post(f"{self.api_url}/client/sendMessage/{os.environ.get('SESSION_NAME')}", json=payload, headers=headers)
-        
+        await self.stop_typing(id) 
+        async with session.post(f"{self.api_url}/client/sendMessage/{SESSION_NAME}", json=payload) as response:
+            response.raise_for_status()
+            
         await asyncio.sleep(random.uniform(0.5, 1.5)) 
-        self.go_offline(id)
+        await self.go_offline(id)
         
-        response.raise_for_status()
-        print(f"[WhatsappService] '{message}' sent to {id}")
-      except requests.RequestException as e:
-          print(f"[WhatsappService] Failed to send message: {e}") 
+        logger.info(f"[WhatsappService] '{message}' sent to {id}")
+      except aiohttp.ClientError as e:
+          logger.error(f"[WhatsappService] Failed to send message: {e}") 

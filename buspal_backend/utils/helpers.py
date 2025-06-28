@@ -1,21 +1,48 @@
-import requests
-import os
-import json
-from typing import Any
-from buspal_backend.models.user import UserModel
 from buspal_backend.models.conversation import ConversationModel
-import re
-import pytz
+from buspal_backend.models.user import UserModel
+from typing import Any, Optional
 from datetime import datetime
+import re
+import os
+import pytz
+import aiohttp
+import logging
+
+logger = logging.getLogger(__name__)
 
 base_url = os.getenv('WHATSAPP_API_URL')
 session_name = os.getenv('SESSION_NAME')
-headers = {
-    "Content-Type": "application/json"
-}
 supported_media = ['image', 'sticker', 'video']
 
-def fetch_messages(chat_id: str, n: int):
+# Global session for connection pooling
+_global_session: Optional[aiohttp.ClientSession] = None
+
+async def _get_http_session() -> aiohttp.ClientSession:
+    """Get or create global aiohttp session with connection pooling"""
+    global _global_session
+    if _global_session is None or _global_session.closed:
+        connector = aiohttp.TCPConnector(
+            limit=100,
+            limit_per_host=30,
+            ttl_dns_cache=300,
+            use_dns_cache=True,
+        )
+        timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        _global_session = aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout,
+            headers={"Content-Type": "application/json"}
+        )
+    return _global_session
+
+async def cleanup_http_session():
+    """Cleanup global session resources"""
+    global _global_session
+    if _global_session and not _global_session.closed:
+        await _global_session.close()
+        _global_session = None
+
+async def fetch_messages(chat_id: str, n: int):
     try:
         data = {
             "chatId": chat_id,
@@ -23,25 +50,35 @@ def fetch_messages(chat_id: str, n: int):
                 "limit": n
             }
         }
-        result = requests.post(f"{base_url}/chat/fetchMessages/{session_name}", data=json.dumps(data), headers=headers)
-        if result.status_code == 200:
-          response = result.json()
-          return response.get('messages')
+        session = await _get_http_session()
+        async with session.post(f"{base_url}/chat/fetchMessages/{session_name}", json=data) as response:
+            response.raise_for_status()
+            result = await response.json()
+            return result.get('messages')
+    except aiohttp.ClientError as e:
+        logger.error("Failed to fetch messages: ", e)
     except Exception as e:
-        print("Failed to fetch messages: ", e)
+        logger.error("Failed to fetch messages: ", e)
 
-def download_media(chat_id: str, message_id: str):
-      data = {
-        "chatId": chat_id,
-        "messageId": message_id
-      }
-      response = requests.post(f"{base_url}/message/downloadMedia/{session_name}", data=json.dumps(data), headers=headers)
-      if response.status_code == 200:
-         result = response.json()
-         return {"mimeType": result['messageMedia']['mimetype'], "base64": result['messageMedia']['data']}
-      return {}
+async def download_media(chat_id: str, message_id: str):
+      try:
+          data = {
+            "chatId": chat_id,
+            "messageId": message_id
+          }
+          session = await _get_http_session()
+          async with session.post(f"{base_url}/message/downloadMedia/{session_name}", json=data) as response:
+              response.raise_for_status()
+              result = await response.json()
+              return {"mimeType": result['messageMedia']['mimetype'], "base64": result['messageMedia']['data']}
+      except aiohttp.ClientError as e:
+          logger.error("Failed to download media: ", e)
+          return {}
+      except Exception as e:
+          logger.error("Failed to download media: ", e)
+          return {}
 
-def get_user_by(id: str, fetch_convo: bool = False):
+async def get_user_by(id: str, fetch_convo: bool = False):
     try:
         res = None
         #Try to find it from db
@@ -54,21 +91,24 @@ def get_user_by(id: str, fetch_convo: bool = False):
            return res
       
         data = { "contactId": id }
-        result = requests.post(f"{base_url}/contact/getClassInfo/{session_name}", data=json.dumps(data), headers=headers)
-        if result.status_code == 200:
-          response = result.json()
-          contact_info = response.get('result')
-          name = contact_info.get('name')
-          res = None
-          if fetch_convo:
-            res = ConversationModel.create(id, name)
-          else:
-            res = UserModel.create(wa_id=id, name=name)
-          return res
+        session = await _get_http_session()
+        async with session.post(f"{base_url}/contact/getClassInfo/{session_name}", json=data) as response:
+            response.raise_for_status()
+            result = await response.json()
+            contact_info = result.get('result')
+            name = contact_info.get('name')
+            res = None
+            if fetch_convo:
+              res = ConversationModel.create(id, name)
+            else:
+              res = UserModel.create(wa_id=id, name=name)
+            return res
+    except aiohttp.ClientError as e:
+        logger.error("Failed to get contact: ", e)
     except Exception as e:
-        print("Failed to get contact: ", e)
+        logger.error("Failed to get contact: ", e)
 
-def parse_wa_message(message: dict[str:Any], skip_media: bool = False, is_dm: bool = False):
+async def parse_wa_message(message: dict[str:Any], skip_media: bool = False, is_dm: bool = False):
     sender_id = message.get('author')
     if is_dm:
       if not message.get('id', {}).get('fromMe'):
@@ -84,7 +124,7 @@ def parse_wa_message(message: dict[str:Any], skip_media: bool = False, is_dm: bo
     if skip_media == False and message.get('type') in supported_media:
         chat_id = message['id']['remote']
         message_id = message['id']['id']
-        media_content = download_media(chat_id, message_id)
+        media_content = await download_media(chat_id, message_id)
         wa_message = {**wa_message, **media_content}
         wa_message['message'] = message.get('caption', None)
     else:
@@ -119,3 +159,34 @@ def epoch_to_beirut(epoch_timestamp, format_string='%Y-%m-%d %H:%M:%S %Z'):
     beirut_dt = utc_dt.astimezone(beirut_tz)
     
     return beirut_dt.strftime(format_string)
+
+def parse_gemini_message(messages):
+    """Transform messages to Gemini format."""
+    from google.genai.types import Content, Part
+    import base64
+    import json
+    
+    contents = []
+    for msg in messages:
+        parts = []
+        media_content = None
+
+        if "base64" in msg:
+            media_content = msg
+        elif msg.get("reply_to") and "base64" in msg["reply_to"]:
+            media_content = msg["reply_to"]
+
+        if media_content:
+            mime_type = media_content['mimeType']
+            data = base64.b64decode(media_content['base64'])
+            parts.append(Part.from_bytes(mime_type=mime_type, data=data))
+            caption = msg.get("message", "")
+            if caption:
+                parts.append(Part.from_text(text=caption))
+        else:
+            parts.append(Part.from_text(text=json.dumps(msg)))
+        
+        if len(parts) > 0:       
+            contents.append(Content(role="user", parts=parts))
+
+    return contents

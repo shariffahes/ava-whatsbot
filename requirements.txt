@@ -74,3 +74,4 @@ yarl==1.20.0
 zipp==3.22.0
 mcp==1.9.3
 pytz==2025.2
+azure-servicebus==7.14.2

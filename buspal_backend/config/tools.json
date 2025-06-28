@@ -31,5 +31,49 @@
          },
          "required": ["query", "reaction_type"]
      }
+  },
+  {
+     "name": "schedule_reminder",
+     "description": "Schedule a reminder to be sent via WhatsApp at a specific time",
+     "parameters": {
+         "type": "object",
+         "properties": {
+             "message": {
+                "type": "string",
+                "description": "The reminder message to send at the scheduled time. Avoid generic messages — instead, add a personal, casual, and friendly touch while preserving the core content of the reminder."
+             },
+             "scheduled_time": {
+                "type": "string",
+                "description": "ISO format datetime string (e.g., '2024-06-25T15:30:00')"
+             },
+            "recurrence_pattern": {
+                "type": "string",
+                "enum": ["DAILY", "WEEKLY", "MONTHLY"],
+                "description": "Optional recurrence pattern"
+             }
+         },
+         "required": ["scheduled_time", "message"]
+     }
+  },
+  {
+     "name": "get_scheduled_reminders",
+     "description": "Get the active scheduled reminders when asked for it.",
+     "parameters": {
+         "type": "object"
+     }
+  },
+  {
+     "name": "cancel_reminder",
+     "description": "Schedule a reminder to be sent via WhatsApp at a specific time",
+     "parameters": {
+         "type": "object",
+         "properties": {
+             "reminder_id": {
+                "type": "string",
+                "description": "The reminder id that should be cancelled."
+             }
+         },
+         "required": ["reminder_id"]
+     }
   }
 ]
