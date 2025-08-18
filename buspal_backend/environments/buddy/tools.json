@@ -1,0 +1,165 @@
+[
+  {
+     "name": "search_google",
+     "description": "Search Google for information or extract URL context information.",
+     "parameters": {
+         "type": "object",
+         "properties": {
+             "query": {
+                 "type": "string",
+                 "description": "The search query with the URL to extract context from."
+             }
+         },
+         "required": ["query"]
+     }
+ },
+  {
+     "name": "send_reaction",
+     "description": "Send a reaction (GIF or sticker) to express emotion, humor, or attitude when it fits naturally into the conversation. Use it when something is funny, dramatic, cute, or deserves a vibe check.",
+     "parameters": {
+         "type": "object",
+         "properties": {
+             "query": {
+                 "type": "string",
+                 "description": "A descriptive prompt for the reaction you want to send. Think of popular meme references, facial expressions, vibes, or keywords like 'facepalm', 'slow clap', or 'Michael Scott no'."
+             },
+             "reaction_type": {
+                "type": "string",
+                "enum": ["GIF", "STICKER"],
+                "description": "Specify whether the reaction should be a GIF or a sticker. Use stickers for punchy, expressive vibes, and GIFs for animated emotional responses. Decide intelligently between them"
+             }
+         },
+         "required": ["query", "reaction_type"]
+     }
+  },
+  {
+     "name": "schedule_reminder",
+     "description": "Schedule a reminder to be sent via WhatsApp at a specific time",
+     "parameters": {
+         "type": "object",
+         "properties": {
+             "message": {
+                "type": "string",
+                "description": "The reminder message to send at the scheduled time. Avoid generic messages — instead, add a personal, casual, and friendly touch while preserving the core content of the reminder."
+             },
+             "scheduled_time": {
+                "type": "string",
+                "description": "ISO format datetime string (e.g., '2024-06-25T15:30:00')"
+             },
+            "recurrence_pattern": {
+                "type": "string",
+                "enum": ["DAILY", "WEEKLY", "MONTHLY"],
+                "description": "Optional recurrence pattern"
+             }
+         },
+         "required": ["scheduled_time", "message"]
+     }
+  },
+  {
+     "name": "get_scheduled_reminders",
+     "description": "Get the active scheduled reminders when asked for it.",
+     "parameters": {
+         "type": "object"
+     }
+  },
+  {
+     "name": "cancel_reminder",
+     "description": "Schedule a reminder to be sent via WhatsApp at a specific time",
+     "parameters": {
+         "type": "object",
+         "properties": {
+             "reminder_id": {
+                "type": "string",
+                "description": "The reminder id that should be cancelled."
+             }
+         },
+         "required": ["reminder_id"]
+     }
+  },
+  {
+     "name": "add_expense",
+     "description": "Add a new expense to the group chat when someone reports spending money. Use this when members mention payments like 'I paid $50 for dinner' or 'I bought groceries for $30'.",
+     "parameters": {
+         "type": "object",
+         "properties": {
+             "desc": {
+                "type": "string",
+                "description": "Brief description of what the expense was for (e.g., 'dinner', 'groceries', 'gas')."
+             },
+             "amount": {
+                "type": "number",
+                "description": "Total amount spent"
+             },
+             "payer_name": {
+                "type": "string",
+                "description": "Name of the person who paid for the expense"
+             },
+             "participants": {
+                "type": "array",
+                "items": {
+                    "type": "string"
+                },
+                "description": "Optional list of participant names who should split the expense. If not provided, defaults to equal split among all group members. The payer is part of the participants by default."
+             }
+         },
+         "required": ["amount", "payer_name"]
+     }
+  },
+  {
+     "name": "calculate_expense_settlement",
+     "description": "Calculate optimal settlements showing who should pay whom. Use this when members ask 'how much do I owe?', 'let's settle up', or 'who owes money?'.",
+     "parameters": {
+         "type": "object"
+     }
+  },
+  {
+     "name": "get_expense_balance",
+     "description": "Get individual expense balance for a specific user. Use when someone asks about their personal balance or how much they owe/should receive.",
+     "parameters": {
+         "type": "object",
+         "properties": {
+             "user_name": {
+                "type": "string",
+                "description": "Name of the user to check balance for"
+             }
+         },
+         "required": ["user_name"]
+     }
+  },
+  {
+     "name": "get_expense_history",
+     "description": "Get recent expense history for the group chat. Use when members ask about recent expenses or want to see what was spent.",
+     "parameters": {
+         "type": "object",
+         "properties": {
+             "limit": {
+                "type": "integer",
+                "description": "Number of recent expenses to return (default: 5)"
+             }
+         }
+     }
+  },
+  {
+     "name": "settle_payments",
+     "description": "Mark all expenses as settled.",
+     "parameters": {
+         "type": "object",
+         "properties": {}
+     }
+  },
+  {
+    "name": "switch_conversation_mode",
+    "description": "Switch the conversation only if asked expliciltly 'switch to <> mode",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "mode": {
+                "type": "string",
+                "enum": ["BUDDY"],
+                "description": "The mode to switch the conversation to."
+            }
+        },
+        "required": ["mode"]
+    }
+  }
+]

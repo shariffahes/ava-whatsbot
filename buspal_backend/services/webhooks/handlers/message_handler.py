@@ -1,18 +1,20 @@
 from typing import Dict, Any, List, Optional
+from buspal_backend.services.ai.ai_service_factory import AIServiceFactory
 from buspal_backend.services.webhooks.base import WebhookHandler
 from buspal_backend.services.webhooks.parsers.message_parser import MessageParser
 from buspal_backend.services.webhooks.processors.message_processor import MessageProcessor
 from buspal_backend.services.webhooks.handlers.response_handler import ResponseHandler
 from buspal_backend.services.storage.conversation_storage import ConversationStorage
-from buspal_backend.services.ai.gemini_service import GeminiService
 from buspal_backend.services.whatsapp import WhatsappService
 from buspal_backend.utils.helpers import fetch_messages
+from buspal_backend.types.enums import AIMode
 from buspal_backend.core.exceptions import (
     MessageProcessingError, 
     MessageParsingError, 
     MessageValidationError
 )
-from buspal_backend.config.message_config import app_config
+from buspal_backend.config.app_config import app_config
+from buspal_backend.models.conversation import ConversationModel
 import asyncio
 import logging
 
@@ -22,19 +24,13 @@ class MessageHandler(WebhookHandler):
     def __init__(self):
         try:
             # Initialize services
-            self.gemini_service = GeminiService()
             self.whatsapp_service = WhatsappService(
                 api_url=app_config.whatsapp_config.api_url
             )
-            
             # Initialize components
             self.parser = MessageParser()
             self.processor = MessageProcessor()
-            self.response_handler = ResponseHandler(
-                self.whatsapp_service, 
-                self.gemini_service
-            )
-            self.storage = ConversationStorage(self.gemini_service)
+            self.mode = AIMode.BUDDY
             
         except Exception as e:
             logger.error(f"Failed to initialize MessageHandler: {e}")
@@ -52,7 +48,19 @@ class MessageHandler(WebhookHandler):
             
             self.parser.validate_message_data(message_data, message_type)
             remote_id = self.parser.get_remote_id(message_data)
+            convo = ConversationModel.get_by_id(remote_id)
+            mode = convo.get('mode', None) # type: ignore
+            self.mode = AIMode(mode if mode else AIMode.BUDDY.value)
+
+            # Initialize other services after conversation mode is determined
+            self.ai_service = AIServiceFactory.get_service(self.mode)
             
+            self.response_handler = ResponseHandler(
+                self.whatsapp_service, 
+                self.ai_service
+            )
+            self.storage = ConversationStorage(self.ai_service)
+
             # Process message
             await self._process_message(message_data, remote_id)
             
@@ -75,21 +83,18 @@ class MessageHandler(WebhookHandler):
             # Extract message body and determine request types
             message_body = self.parser.extract_message_body(message_data)
             bot_reply_requested = self.processor.is_bot_reply_requested(message_body)
-            business_reply_requested = self.processor.is_business_reply_requested(message_body)
-            
+
             # Determine message count to fetch
             message_count = self.processor.determine_message_count(
-                bot_reply_requested, 
-                business_reply_requested
+                bot_reply_requested
             )
 
-            logger.info(f"Processing message from {remote_id}, bot_reply: {bot_reply_requested}, business_reply: {business_reply_requested}")
+            logger.info(f"Processing message from {remote_id}, bot_reply: {bot_reply_requested}")
             
             # Fetch and format messages
             messages = await self._fetch_and_format_messages(
                 remote_id, 
-                message_count, 
-                business_reply_requested
+                message_count
             )
             
             if not messages:
@@ -102,8 +107,7 @@ class MessageHandler(WebhookHandler):
             )
             
             if not self.processor.should_process_message(
-                bot_reply_requested, 
-                business_reply_requested, 
+                bot_reply_requested,  
                 message_count
             ):
                 return
@@ -112,10 +116,7 @@ class MessageHandler(WebhookHandler):
             if bot_reply_requested:
                 await self.response_handler.set_typing_status(remote_id, True)
                 await self.response_handler.handle_bot_reply(remote_id, messages)
-            elif business_reply_requested:
-                await self.response_handler.set_typing_status(remote_id, True)
-                await self.response_handler.handle_business_reply(remote_id, messages)
-            
+  
         except Exception as e:
             logger.error(f"Error processing message for {remote_id}: {e}")
             raise MessageProcessingError(f"Message processing failed: {e}")
@@ -123,8 +124,7 @@ class MessageHandler(WebhookHandler):
     async def _fetch_and_format_messages(
         self, 
         remote_id: str, 
-        count: int, 
-        is_business: bool = False
+        count: int
     ) -> List[Dict[str, Any]]:
         """Fetch and format recent messages from the group."""
         try:
@@ -135,19 +135,16 @@ class MessageHandler(WebhookHandler):
             formatted_messages = []
             is_group = self.parser.is_group_message(remote_id)
             
-            # Handle business message filtering
-            if is_business:
-                messages = self.processor.filter_business_messages(messages)
-            
             # Format each message
             for idx, message in enumerate(messages):
                 message_data = message.get('_data')
                 if not message_data:
                     continue
                 
-                skip_media = self.processor.should_skip_media(idx, is_business)
+                skip_media = self.processor.should_skip_media(idx)
                 formatted_msg = await self.parser.format_message(
-                    message_data, 
+                    message_data,
+                    remote_id,
                     skip_media, 
                     is_group
                 )

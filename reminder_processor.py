@@ -5,14 +5,14 @@ import datetime
 import pytz
 import os
 from google import genai
-from buspal_backend.config.constants import PROMPTS
+from buspal_backend.environments.buddy.constants import PROMPTS
 from buspal_backend.services.whatsapp import WhatsappService
 from buspal_backend.models.reminder import ReminderModel
 from google.genai.types import GenerateContentConfig, Part, Content
 
 # Initialize WhatsApp service
 whatsapp_client = WhatsappService(
-    api_url=os.environ.get("WHATSAPP_API_URL")
+    api_url=os.environ.get("WHATSAPP_API_URL") # type: ignore
 )
 gemini = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"),)
 
@@ -29,7 +29,6 @@ async def main(msg: func.ServiceBusMessage):
         # Parse the message body
         message_body = msg.get_body().decode('utf-8')
         reminder_data = json.loads(message_body)
-        print(f"processing reminder: {reminder_data}", )
         logging.info(f"Processing reminder: {reminder_data.get('reminder_id')}")
         
         # Extract reminder details

@@ -36,7 +36,7 @@ class MCPClient:
         print("\nConnected to server ")
 
     async def list_tools(self):
-        return await self.session.list_tools()
+        return await self.session.list_tools() # type: ignore
   
     async def cleanup(self):
         """Clean up resources"""

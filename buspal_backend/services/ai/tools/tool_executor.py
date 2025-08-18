@@ -1,12 +1,14 @@
 from typing import Dict, Any, Optional
 from buspal_backend.core.exceptions import ToolExecutionError
-from buspal_backend.config.constants import TOOLS
+from buspal_backend.config.constants import TOOLS_MAP
 from google.genai.types import GenerateContentConfig, Tool, GoogleSearch, UrlContext, Part
 from buspal_backend.core.exceptions import AIServiceError
-from buspal_backend.config.message_config import app_config
+from buspal_backend.config.app_config import AIConfig
 from google import genai
 import inspect
 import logging
+
+from buspal_backend.types.ai_types import FunctionCall
 
 logger = logging.getLogger(__name__)
 
@@ -14,20 +16,24 @@ class ToolExecutor:
     """Handles execution of AI function calls."""
     
     def __init__(self):
-        self.tools = TOOLS
+        self.tools = TOOLS_MAP
     
-    async def execute_function_call(self, function_call, chat_id: Optional[str] = None) -> Dict[str, Any]:
+    async def execute_function_call(self, function_call: FunctionCall, chat_id: Optional[str] = None) -> Dict[str, Any]:
         """Execute a single function call and return the result."""
         try:
+            if not function_call.name:
+                raise ToolExecutionError("Function call name is required")
+            
             function_name = function_call.name
-            args = function_call.args
+            args = function_call.arguments if function_call.arguments else {}
             
             logger.info(f"Executing function: {function_name}")
             logger.info(f"Function arguments: {args}")
             
+            # Static arguments to provide for some functions
             extra_args = self._get_extra_args(function_name, chat_id)
             
-            # Handle special cases
+            # Handle special function executions
             if function_name == "search_google":
                 return await self._handle_google_search(args)
             elif function_name == "send_reaction":
@@ -41,7 +47,7 @@ class ToolExecutor:
     
     def _get_extra_args(self, function_name: str, chat_id: Optional[str]) -> Dict[str, Any]:
         """Get additional arguments for specific functions."""
-        if function_name in {"schedule_reminder", "get_scheduled_reminders"} and chat_id:
+        if function_name in {"schedule_reminder", "get_scheduled_reminders", "add_expense", "calculate_expense_settlement", "get_expense_balance", "get_expense_history", "settle_payments", "switch_conversation_mode"} and chat_id:
             return {"chat_id": chat_id}
         return {}
     
@@ -78,23 +84,23 @@ class ToolExecutor:
         
         return {"result": result}
     
-    async def _handle_google_search(self, args: Dict[str, Any]) -> str:
+    async def _handle_google_search(self, args: Dict[str, Any]) -> dict[str, Any]:
         """Process query using Google's native tools."""
         try:
             query = args.get('query', None)
             if query is None:
-                return "Error occured searching google"
+                return {'error': 'Error occured searching google', 'success': False}
             google_search_tool = Tool(google_search=GoogleSearch())
-            url_context_tool = Tool(url_context=UrlContext)
+            url_context_tool = Tool(url_context=UrlContext) # type: ignore
             
             config = GenerateContentConfig(
                 system_instruction="Fulfill the user query using one of the tools defined to you.",
                 tools=[google_search_tool, url_context_tool]
             )
-            client_config = app_config.ai_config
-            client = genai.Client(api_key=client_config.api_key)
+            _ai_config = AIConfig(provider="gemini")
+            client = genai.Client(api_key=_ai_config.api_key)
             response = await client.aio.models.generate_content(
-                model=client_config.model_name,
+                model=_ai_config.model_name,
                 contents=[Part.from_text(text=query)],
                 config=config
             )

@@ -1,0 +1,15 @@
+  {
+    "name": "switch_conversation_mode",
+    "description": "Switch the conversation only if asked expliciltly 'switch to <> mode",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "mode": {
+                "type": "string",
+                "enum": ["BUDDY"],
+                "description": "The mode to switch the conversation to."
+            }
+        },
+        "required": ["mode"]
+    }
+  }

@@ -27,6 +27,10 @@ class GeminiAPIError(AIServiceError):
     """Raised when Gemini API calls fail."""
     pass
 
+class OpenAIAPIError(AIServiceError):
+    """Raised when OpenAI API calls fail."""
+    pass
+
 class ToolExecutionError(AIServiceError):
     """Raised when AI tool execution fails."""
     pass

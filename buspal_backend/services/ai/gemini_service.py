@@ -3,40 +3,49 @@ from google import genai
 from google.genai.types import GenerateContentConfig, Tool
 from buspal_backend.services.ai.mcp.manager import mcp_manager
 from buspal_backend.services.ai.tools.tool_executor import ToolExecutor
+from buspal_backend.services.ai.ai_provider import AIProvider
 from buspal_backend.services.ai.processors.response_processor import ResponseProcessor
-from buspal_backend.config.constants import PROMPTS, SCHEMAS
-from buspal_backend.config.message_config import app_config
+from buspal_backend.config.app_config import AIConfig
+from buspal_backend.types.enums import AIMode
 from buspal_backend.core.exceptions import AIServiceError, GeminiAPIError
+from buspal_backend.services.ai.tools.tool_response_adapter import GeminiAdapter
+from buspal_backend.types.ai_types import CompletionResponse, FunctionCall
 from buspal_backend.utils.helpers import current_time_in_beirut, parse_gemini_message
 import json
 import logging
+import importlib.util
+import os
 
 logger = logging.getLogger(__name__)
 
-class GeminiService:
-    def __init__(self):
+class GeminiService(AIProvider):
+    def __init__(self, mode: AIMode = AIMode.BUDDY):
         try:
-            self.config = app_config.ai_config
+            
+            self.config = AIConfig(mode=mode)
             self.client = genai.Client(api_key=self.config.api_key)
             self.model = self.config.model_name
             
             # Initialize helper components
-            self.tool_executor = ToolExecutor()
-            self.response_processor = ResponseProcessor(self.client, self.tool_executor)
+            self.response_processor = ResponseProcessor(self.client, GeminiAdapter())
             
-            # Load tools configuration once at startup
+            # Load configurations once at startup
             self._custom_tools = self._load_tools_config()
+            self._prompts, self._schemas = self._load_prompts_and_schemas()
             
         except Exception as e:
             logger.error(f"Failed to initialize GeminiService: {e}")
             raise GeminiAPIError(f"Service initialization failed: {e}") from e
     
     async def process(self, messages: List[Dict], context: Optional[str] = None, 
-                     chat_id: Optional[str] = None, instructions: str = PROMPTS['BUDDY']) -> Dict[str, Any]:
+                     chat_id: Optional[str] = None, instructions: Optional[str] = None, retry_count: int = 0) -> Dict[str, Any]:
         """Process conversation messages and return AI response."""
         try:
+            instructions = instructions or self._prompts.get('MAIN', '')
             config = self._build_config(instructions, context)
-            gemini_messages = parse_gemini_message(messages)
+
+            #exclude media if this is the second try
+            gemini_messages = parse_gemini_message(messages, retry_count == 1)
             
             response = await self.client.aio.models.generate_content(
                 model=self.model,
@@ -44,13 +53,19 @@ class GeminiService:
                 config=config
             )
             
-            logger.info(f"Initial Gemini response received")
-            logger.info(f"Function calls detected: {bool(response.function_calls)}")
+            logger.info(f"Initial Gemini response received. Count {retry_count}")
+            logger.info(f"Function calls detected: {len(response.function_calls if response.function_calls else [])}")
             
             # Process function calls if present
             if response.function_calls:
+                custom_response = CompletionResponse(
+                    text=response.text.strip() if response.text else None,
+                    function_calls=[FunctionCall(name=func_call.name, arguments=func_call.args) for func_call in response.function_calls],
+                    raw_response=response
+                )
+
                 return await self.response_processor.process_function_calls(
-                    response, gemini_messages, config, chat_id
+                    custom_response, gemini_messages, config, self.model, chat_id
                 )
             
             return {"text": response.text.strip() if response.text else None, "media": None}
@@ -59,41 +74,26 @@ class GeminiService:
             raise
         except Exception as e:
             logger.error(f"Unexpected error in process: {e}", extra={"chat_id": chat_id})
+            error_message = str(e)
+            #Gemini failed possibly becuase of media processing rate limit
+            if "500" in error_message and retry_count == 0:
+                logger.info("Processing Failed. Retry without media")
+                return await self.process(messages, context, chat_id, instructions, 1)
             raise AIServiceError(f"Processing failed: {e}") from e
     
-    async def process_business(self, messages: List[Dict]) -> str:
-        """Process business messages with structured output."""
-        try:
-            config = GenerateContentConfig(
-                thinking_config=genai.types.ThinkingConfig(thinking_budget=self.config.thinking_budget),
-                response_mime_type="application/json",
-                response_schema=SCHEMAS['BUSINESS'],
-                system_instruction=PROMPTS['BUSINESS']
-            )
-            
-            response = await self.client.aio.models.generate_content(
-                model=self.model,
-                contents=parse_gemini_message(messages),
-                config=config
-            )
-            
-            return response.text
-            
-        except AIServiceError:
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error in process_business: {e}")
-            raise AIServiceError(f"Business processing failed: {e}") from e
-    
-    async def process_messages(self, messages: List[Dict], is_memory: bool = False) -> str:
+    async def generate_completion(self, messages: List[Dict], prompt_key: str) -> Optional[str]:
         """Process messages for summarization or memory extraction."""
         try:
-            config_key = 'MEMORY_PROCESS' if is_memory else 'SUMMARY'
+            instructions=self._prompts.get(prompt_key,'')
+            schema = self._schemas.get(prompt_key, None)
+            if not instructions or not schema:
+                raise AIServiceError(f"No instructions or schema found for key: {prompt_key}")
             
+            self._prompts
             config = GenerateContentConfig(
-                system_instruction=PROMPTS[config_key],
+                system_instruction=instructions,
                 response_mime_type="application/json",
-                response_schema=SCHEMAS[config_key]
+                response_schema=schema
             )
             
             response = await self.client.aio.models.generate_content(
@@ -110,7 +110,7 @@ class GeminiService:
             logger.error(f"Unexpected error in process_messages: {e}")
             raise AIServiceError(f"Message processing failed: {e}") from e
 
-    def _load_tools_config(self) -> Dict[str, Any]:
+    def _load_tools_config(self) -> List[Dict[str, Any]]:
         """Load tools configuration once at startup."""
         try:
             with open(self.config.tools_config_path, 'r') as file:
@@ -121,10 +121,33 @@ class GeminiService:
             logger.error(f"Failed to load tools config: {e}")
             return []
     
+    def _load_prompts_and_schemas(self) -> tuple[Dict[str, str], Dict[str, Any]]:
+        """Load prompts and schemas from environment-specific constants file."""
+        try:
+            # Get the absolute path to the constants file
+            constants_path = os.path.abspath(self.config.prompts_path)
+            
+            # Load the module dynamically
+            spec = importlib.util.spec_from_file_location("constants", constants_path)
+            constants_module = importlib.util.module_from_spec(spec) # type: ignore
+            spec.loader.exec_module(constants_module) # type: ignore
+            
+            prompts = constants_module.PROMPTS
+            schemas = {}
+            if hasattr(constants_module, 'SCHEMAS'):
+                schemas = constants_module.SCHEMAS
+            
+            logger.info(f"Loaded {len(prompts)} prompts and {len(schemas)} schemas from {constants_path}")
+            return prompts, schemas
+            
+        except Exception as e:
+            logger.error(f"Failed to load prompts and schemas from {self.config.prompts_path}: {e}")
+            return {}, {}
+    
     def _build_config(self, instructions: Optional[str], context: Optional[str]) -> GenerateContentConfig:
         """Build configuration for AI processing."""
         if instructions is None:
-            instructions = PROMPTS['BUDDY']
+            instructions = self._prompts.get('MAIN', '')
 
         instructions += f"\n#Current Date:\n{current_time_in_beirut()}\n\n"
         
@@ -133,7 +156,7 @@ class GeminiService:
 
         tools = [mcp.session for mcp in mcp_manager.mcps]
         if self._custom_tools:
-            tools.append(Tool(function_declarations=self._custom_tools))
+            tools.append(Tool(function_declarations=self._custom_tools)) # type: ignore
         
         return GenerateContentConfig(
             system_instruction=instructions,

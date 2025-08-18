@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional
 from buspal_backend.utils.helpers import parse_wa_message, get_user_by
 from buspal_backend.core.exceptions import MessageParsingError, MessageValidationError
-from buspal_backend.config.message_config import app_config
+from buspal_backend.config.app_config import app_config
 import logging
 
 logger = logging.getLogger(__name__)
@@ -50,13 +50,13 @@ class MessageParser:
             return message_data.get('caption', '')
         return message_data.get('body', '')
     
-    async def format_message(self, message: Dict[str, Any], skip_media: bool = False, is_group: bool = True) -> Optional[Dict[str, Any]]:
+    async def format_message(self, message: Dict[str, Any], convo_id: str, skip_media: bool = False, is_group: bool = True) -> Optional[Dict[str, Any]]:
         """Format a single message with sender information."""
         try:
             msg = await parse_wa_message(message, skip_media, is_dm=not is_group)
             
             if msg.get('sender'):
-                user = await get_user_by(msg['sender'])
+                user = await get_user_by(msg['sender'], convo_id)
                 if user and user.get('name'):
                     msg['sender'] = user['name']
                 else:

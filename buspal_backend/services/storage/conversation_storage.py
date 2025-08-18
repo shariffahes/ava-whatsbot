@@ -1,8 +1,9 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from buspal_backend.models.conversation import ConversationModel
+from buspal_backend.services.ai.ai_provider import AIProvider
 from buspal_backend.utils.helpers import get_user_by
 from buspal_backend.core.exceptions import ConversationStorageError
-from buspal_backend.config.message_config import app_config
+from buspal_backend.config.app_config import app_config
 import json
 import logging
 
@@ -11,14 +12,14 @@ logger = logging.getLogger(__name__)
 class ConversationStorage:
     """Handles conversation storage and summarization logic."""
     
-    def __init__(self, gemini_service):
-        self.gemini_service = gemini_service
+    def __init__(self, ai_service: AIProvider):
+        self.ai_service = ai_service
         self.config = app_config.message_config
     
     async def store_message_and_summarize(self, remote_id: str, messages: List[Dict[str, Any]]) -> None:
         """Store messages and handle summarization when threshold is reached."""
         try:
-            conversation = await get_user_by(remote_id, True)
+            conversation = await get_user_by(remote_id)
             current_message_count = len(conversation.get("messages", []))
             
             if current_message_count >= self.config.summary_message_threshold:
@@ -33,7 +34,7 @@ class ConversationStorage:
     async def _create_summary_and_reset(self, remote_id: str, conversation: Dict[str, Any]) -> None:
         """Create summary and reset message history."""
         try:
-            result = await self.gemini_service.process_messages(conversation["messages"])
+            result = await self.ai_service.generate_completion(conversation["messages"], "SUMMARY")
             response = json.loads(result)
             
             logger.debug(f"Summary generated for {remote_id}: {result}")
@@ -73,7 +74,7 @@ class ConversationStorage:
         except Exception as e:
             raise ConversationStorageError(f"Failed to store message: {e}")
     
-    def get_conversation_context(self, remote_id: str) -> str:
+    def get_conversation_context(self, remote_id: str) -> Optional[str]:
         """Retrieve conversation context for AI processing."""
         try:
             conversation = ConversationModel.get_by_id(remote_id)

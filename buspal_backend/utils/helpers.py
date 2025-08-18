@@ -78,14 +78,14 @@ async def download_media(chat_id: str, message_id: str):
           logger.error("Failed to download media: ", e)
           return {}
 
-async def get_user_by(id: str, fetch_convo: bool = False):
+async def get_user_by(id: str, convo_id: str | None = None) -> Any:
     try:
         res = None
-        #Try to find it from db
-        if fetch_convo:
+        #If convo id is none, then id is the convo id
+        if convo_id is None:
            res = ConversationModel.get_by_id(id)
         else:
-          res = UserModel.get_by_id(id)
+          res = UserModel.get_by_id(id, convo_id)
 
         if res is not None:
            return res
@@ -98,21 +98,21 @@ async def get_user_by(id: str, fetch_convo: bool = False):
             contact_info = result.get('result')
             name = contact_info.get('name')
             res = None
-            if fetch_convo:
+            if convo_id is None:
               res = ConversationModel.create(id, name)
             else:
-              res = UserModel.create(wa_id=id, name=name)
+              res = UserModel.create(wa_id=id, name=name, convo_id=convo_id)
             return res
     except aiohttp.ClientError as e:
         logger.error("Failed to get contact: ", e)
     except Exception as e:
         logger.error("Failed to get contact: ", e)
 
-async def parse_wa_message(message: dict[str:Any], skip_media: bool = False, is_dm: bool = False):
+async def parse_wa_message(message: dict[str, Any], skip_media: bool = False, is_dm: bool = False):
     sender_id = message.get('author')
     if is_dm:
       if not message.get('id', {}).get('fromMe'):
-        sender_id = message.get('from').get('_serialized')
+        sender_id = message.get('from', {}).get('_serialized')
     if sender_id is None:
         return {}
     if type(sender_id) != str:
@@ -160,7 +160,7 @@ def epoch_to_beirut(epoch_timestamp, format_string='%Y-%m-%d %H:%M:%S %Z'):
     
     return beirut_dt.strftime(format_string)
 
-def parse_gemini_message(messages):
+def parse_gemini_message(messages, exclude_media: bool = False):
     """Transform messages to Gemini format."""
     from google.genai.types import Content, Part
     import base64
@@ -175,8 +175,10 @@ def parse_gemini_message(messages):
             media_content = msg
         elif msg.get("reply_to") and "base64" in msg["reply_to"]:
             media_content = msg["reply_to"]
-
+        
         if media_content:
+            if exclude_media:
+                continue
             mime_type = media_content['mimeType']
             data = base64.b64decode(media_content['base64'])
             parts.append(Part.from_bytes(mime_type=mime_type, data=data))
@@ -190,3 +192,32 @@ def parse_gemini_message(messages):
             contents.append(Content(role="user", parts=parts))
 
     return contents
+
+def parse_openai_messages(messages, exclude_media: bool = False):
+    """Transform messages to OpenAI format."""
+    import json
+    msgs = []
+    for message in messages:
+      content = []
+      media_content = None
+
+      if "base64" in message:
+          media_content = message
+      elif message.get("reply_to") and "base64" in message["reply_to"]:
+          media_content = message["reply_to"]
+        
+      if media_content:
+          if exclude_media:
+              continue
+          mime_type = media_content['mimeType']
+          data = media_content['base64']
+          content.append({ "type": "text", "text": f"data:{mime_type};{data}" })
+          caption = message.get("message", "")
+          if caption:
+              content.append({"type": "text", "text": caption})
+      else:
+          content.append({"type": "text", "text": json.dumps(message)})
+      
+      if len(content) > 0:       
+          msgs.append({"role": "user", "content": content})
+    return msgs
