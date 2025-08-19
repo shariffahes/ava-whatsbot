@@ -13,7 +13,7 @@ class ResponseHandler:
     def __init__(self, whatsapp_service: WhatsappService, ai_service: AIProvider):
         self.whatsapp_service = whatsapp_service
         self.ai_service = ai_service
-        self.storage = ConversationStorage(ai_service)
+        self.storage = ConversationStorage()
     
     async def handle_bot_reply(self, remote_id: str, messages: list) -> None:
         """Generate and send bot reply."""

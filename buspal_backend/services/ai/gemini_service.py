@@ -2,7 +2,6 @@ from typing import List, Dict, Any, Optional
 from google import genai
 from google.genai.types import GenerateContentConfig, Tool
 from buspal_backend.services.ai.mcp.manager import mcp_manager
-from buspal_backend.services.ai.tools.tool_executor import ToolExecutor
 from buspal_backend.services.ai.ai_provider import AIProvider
 from buspal_backend.services.ai.processors.response_processor import ResponseProcessor
 from buspal_backend.config.app_config import AIConfig
@@ -11,28 +10,20 @@ from buspal_backend.core.exceptions import AIServiceError, GeminiAPIError
 from buspal_backend.services.ai.tools.tool_response_adapter import GeminiAdapter
 from buspal_backend.types.ai_types import CompletionResponse, FunctionCall
 from buspal_backend.utils.helpers import current_time_in_beirut, parse_gemini_message
-import json
 import logging
-import importlib.util
-import os
 
 logger = logging.getLogger(__name__)
 
 class GeminiService(AIProvider):
-    def __init__(self, mode: AIMode = AIMode.BUDDY):
+    def __init__(self, config: AIConfig = AIConfig(mode=AIMode.BUDDY)):
         try:
-            
-            self.config = AIConfig(mode=mode)
+            super().__init__(config)
             self.client = genai.Client(api_key=self.config.api_key)
             self.model = self.config.model_name
-            
+          
             # Initialize helper components
             self.response_processor = ResponseProcessor(self.client, GeminiAdapter())
-            
-            # Load configurations once at startup
-            self._custom_tools = self._load_tools_config()
-            self._prompts, self._schemas = self._load_prompts_and_schemas()
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize GeminiService: {e}")
             raise GeminiAPIError(f"Service initialization failed: {e}") from e
@@ -46,13 +37,12 @@ class GeminiService(AIProvider):
 
             #exclude media if this is the second try
             gemini_messages = parse_gemini_message(messages, retry_count == 1)
-            
+
             response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=gemini_messages,
                 config=config
             )
-            
             logger.info(f"Initial Gemini response received. Count {retry_count}")
             logger.info(f"Function calls detected: {len(response.function_calls if response.function_calls else [])}")
             
@@ -65,7 +55,7 @@ class GeminiService(AIProvider):
                 )
 
                 return await self.response_processor.process_function_calls(
-                    custom_response, gemini_messages, config, self.model, chat_id
+                    custom_response, gemini_messages, config, self.model, None, chat_id
                 )
             
             return {"text": response.text.strip() if response.text else None, "media": None}
@@ -86,10 +76,9 @@ class GeminiService(AIProvider):
         try:
             instructions=self._prompts.get(prompt_key,'')
             schema = self._schemas.get(prompt_key, None)
-            if not instructions or not schema:
+            if not instructions and not schema:
                 raise AIServiceError(f"No instructions or schema found for key: {prompt_key}")
-            
-            self._prompts
+          
             config = GenerateContentConfig(
                 system_instruction=instructions,
                 response_mime_type="application/json",
@@ -109,40 +98,6 @@ class GeminiService(AIProvider):
         except Exception as e:
             logger.error(f"Unexpected error in process_messages: {e}")
             raise AIServiceError(f"Message processing failed: {e}") from e
-
-    def _load_tools_config(self) -> List[Dict[str, Any]]:
-        """Load tools configuration once at startup."""
-        try:
-            with open(self.config.tools_config_path, 'r') as file:
-                tools = json.load(file)
-            logger.info(f"Loaded {len(tools)} custom tools")
-            return tools
-        except Exception as e:
-            logger.error(f"Failed to load tools config: {e}")
-            return []
-    
-    def _load_prompts_and_schemas(self) -> tuple[Dict[str, str], Dict[str, Any]]:
-        """Load prompts and schemas from environment-specific constants file."""
-        try:
-            # Get the absolute path to the constants file
-            constants_path = os.path.abspath(self.config.prompts_path)
-            
-            # Load the module dynamically
-            spec = importlib.util.spec_from_file_location("constants", constants_path)
-            constants_module = importlib.util.module_from_spec(spec) # type: ignore
-            spec.loader.exec_module(constants_module) # type: ignore
-            
-            prompts = constants_module.PROMPTS
-            schemas = {}
-            if hasattr(constants_module, 'SCHEMAS'):
-                schemas = constants_module.SCHEMAS
-            
-            logger.info(f"Loaded {len(prompts)} prompts and {len(schemas)} schemas from {constants_path}")
-            return prompts, schemas
-            
-        except Exception as e:
-            logger.error(f"Failed to load prompts and schemas from {self.config.prompts_path}: {e}")
-            return {}, {}
     
     def _build_config(self, instructions: Optional[str], context: Optional[str]) -> GenerateContentConfig:
         """Build configuration for AI processing."""

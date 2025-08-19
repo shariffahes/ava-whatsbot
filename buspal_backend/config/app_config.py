@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 import os
 from dotenv import load_dotenv
 from buspal_backend.types.enums import AIMode
@@ -39,7 +39,7 @@ class MessageConfig:
 @dataclass
 class AIConfig:
     """Configuration for AI service."""
-    provider: str = "gemini"
+    provider: Optional[str] = field(default=None)
     model_name: str = field(init=False)
     api_key: str = field(init=False)
     prompts_path: str = field(init=False)
@@ -56,7 +56,7 @@ class AIConfig:
         if not self.mode or self.mode not in self.AI_PROVIDERS:
           raise ValueError("mode variable is required")
 
-        self.provider = self.provider if self.provider else self.AI_PROVIDERS[self.mode]
+        self.provider = self.provider or self.AI_PROVIDERS[self.mode]
         self.prompts_path = f"buspal_backend/environments/{self.mode.value}/constants.py"
         self.tools_config_path = f"buspal_backend/environments/{self.mode.value}/tools.json"
  
@@ -64,8 +64,8 @@ class AIConfig:
           self.api_key = os.environ.get("GEMINI_API_KEY") # type: ignore
           self.model_name = "gemini-2.5-flash-preview-05-20"
         elif self.provider == "openai":
-          self.api_key = os.environ.get("AZURE_OPENAI_KEY") # type: ignore
-          self.model_name = "gpt-4o"
+          self.api_key = os.environ.get("OPEN_AI_KEY") # type: ignore
+          self.model_name = "gpt-4o-mini"
         
         if not self.api_key:
           raise ValueError("API_KEY environment variable is required")

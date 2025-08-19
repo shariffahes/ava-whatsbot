@@ -1,6 +1,8 @@
 from typing import Dict, Any, List, Optional
 from buspal_backend.models.conversation import ConversationModel
 from buspal_backend.services.ai.ai_provider import AIProvider
+from buspal_backend.services.ai.ai_service_factory import AIServiceFactory
+from buspal_backend.types.enums import AIMode
 from buspal_backend.utils.helpers import get_user_by
 from buspal_backend.core.exceptions import ConversationStorageError
 from buspal_backend.config.app_config import app_config
@@ -12,8 +14,8 @@ logger = logging.getLogger(__name__)
 class ConversationStorage:
     """Handles conversation storage and summarization logic."""
     
-    def __init__(self, ai_service: AIProvider):
-        self.ai_service = ai_service
+    def __init__(self):
+        self.ai_service = AIServiceFactory.get_service(AIMode.BUDDY, "gemini")
         self.config = app_config.message_config
     
     async def store_message_and_summarize(self, remote_id: str, messages: List[Dict[str, Any]]) -> None:

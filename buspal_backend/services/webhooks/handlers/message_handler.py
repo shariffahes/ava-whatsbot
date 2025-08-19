@@ -59,7 +59,7 @@ class MessageHandler(WebhookHandler):
                 self.whatsapp_service, 
                 self.ai_service
             )
-            self.storage = ConversationStorage(self.ai_service)
+            self.storage = ConversationStorage()
 
             # Process message
             await self._process_message(message_data, remote_id)

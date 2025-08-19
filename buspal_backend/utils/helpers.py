@@ -1,12 +1,16 @@
+from agents import FunctionTool, RunContextWrapper, Tool, TResponseInputItem
 from buspal_backend.models.conversation import ConversationModel
 from buspal_backend.models.user import UserModel
-from typing import Any, Optional
+from typing import Any, List, Optional
 from datetime import datetime
 import re
 import os
 import pytz
 import aiohttp
 import logging
+
+from buspal_backend.services.ai.processors.response_processor import ResponseProcessor
+from buspal_backend.types.ai_types import AIContext, CompletionResponse, FunctionCall
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +197,7 @@ def parse_gemini_message(messages, exclude_media: bool = False):
 
     return contents
 
-def parse_openai_messages(messages, exclude_media: bool = False):
+def parse_agent_messages(messages, exclude_media: bool = False) -> List[TResponseInputItem]:
     """Transform messages to OpenAI format."""
     import json
     msgs = []
@@ -211,13 +215,53 @@ def parse_openai_messages(messages, exclude_media: bool = False):
               continue
           mime_type = media_content['mimeType']
           data = media_content['base64']
-          content.append({ "type": "text", "text": f"data:{mime_type};{data}" })
+          content.append({ "type": "input_image", "image_url": f"data:{mime_type};base64,{data}" })
           caption = message.get("message", "")
           if caption:
-              content.append({"type": "text", "text": caption})
+              content.append({"type": "input_text", "text": caption})
       else:
-          content.append({"type": "text", "text": json.dumps(message)})
+          content.append({"type": "input_text", "text": json.dumps(message)})
       
       if len(content) > 0:       
           msgs.append({"role": "user", "content": content})
     return msgs
+
+def build_agent_tools(tools: List[dict[str, Any]]) -> List[Tool]:
+    from buspal_backend.services.ai.processors.response_processor import ResponseProcessor
+
+    func_tools = []
+    processor = ResponseProcessor(None)
+
+    for tool in tools:
+        def make_invoke_tool(name, processor):
+          return lambda *args, **kwargs: (
+              run_function(name, processor, *args, **kwargs),
+          )[-1]
+        parameters = tool.get("parameters", {})
+        parameters["additionalProperties"] = False
+        func_tools.append(
+            FunctionTool(
+              name=tool['name'],
+              description=tool['description'],
+              params_json_schema=parameters,
+              on_invoke_tool=make_invoke_tool(tool['name'], processor),
+              strict_json_schema=False,
+          )
+        )
+    return func_tools
+
+async def run_function(function_name: str, processor: ResponseProcessor, ctx: RunContextWrapper[AIContext], kwargs: str) -> dict[str, Any]:
+    import json
+    args = json.loads(kwargs) if isinstance(kwargs, str) else kwargs or {}
+    
+    response = CompletionResponse(
+        text=None,
+        function_calls=[FunctionCall(
+            name=function_name,
+            arguments=args
+        )],
+        raw_response=None
+    )
+    chat_id = ctx.context.chat_id if ctx.context.chat_id else ""
+    func_result =  await processor.process_function_calls(response, [], None, "", ctx, chat_id)
+    return func_result

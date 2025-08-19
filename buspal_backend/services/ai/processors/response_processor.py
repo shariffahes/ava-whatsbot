@@ -1,11 +1,11 @@
 from typing import Dict, Any, List, Optional
+from agents import RunContextWrapper
 from google.genai.types import Content
 from buspal_backend.types.enums import AIMode
 from buspal_backend.services.ai.tools.tool_executor import ToolExecutor
 from google.genai.types import GenerateContentConfig
 from buspal_backend.services.ai.tools.tool_response_adapter import ToolResponseAdapter
-from buspal_backend.types.ai_types import CompletionResponse
-from buspal_backend.utils.helpers import parse_gemini_message
+from buspal_backend.types.ai_types import AIContext, CompletionResponse
 from buspal_backend.config.app_config import AIConfig
 from google import genai
 import json
@@ -18,12 +18,12 @@ logger = logging.getLogger(__name__)
 class ResponseProcessor:
     """Handles AI response processing and function call management."""
     
-    def __init__(self, client, response_adapter: ToolResponseAdapter):
+    def __init__(self, client, response_adapter: Optional[ToolResponseAdapter] = None):
         self.client = client
         self.tool_executor = ToolExecutor()
         self.response_adapter = response_adapter
     
-    async def process_function_calls(self, response: CompletionResponse, prev_messages: List[Content], config, model: str, chat_id: Optional[str] = None) -> Dict[str, Any]:
+    async def process_function_calls(self, response: CompletionResponse, prev_messages: List[Content], config, model: str, ctx: Optional[RunContextWrapper[AIContext]], chat_id: Optional[str] = None) -> Dict[str, Any]:
         """Process function calls and return final response."""
         output = response.text
         media = None
@@ -33,7 +33,8 @@ class ResponseProcessor:
         while retry_count < max_retries and response.function_calls:
             try:
                 retry_count += 1
-                contents = self.response_adapter.prepare_messages(prev_messages, response)
+                if self.response_adapter:
+                  contents = self.response_adapter.prepare_messages(prev_messages, response)
                 
                 for function_call in response.function_calls:
                     function_result = await self.tool_executor.execute_function_call(function_call, chat_id)
@@ -43,15 +44,23 @@ class ResponseProcessor:
                         media, should_reply, selected_reaction = await self._process_reaction_selection(
                             function_result, prev_messages
                         )
+                        if ctx:
+                            ctx.context.metaData['media'] = media
                         if not should_reply:
+                            if ctx:
+                              ctx.context.metaData['halt_reply'] = True
                             return {"text": None, "media": media}
                         function_result = {"gif_content": selected_reaction}
-                    
+
                     # Add function response to contents
-                    contents = self.response_adapter.parse_tool_response(function_call, function_result, contents)
+                    if self.response_adapter:
+                      contents = self.response_adapter.parse_tool_response(function_call, function_result, contents)
+                    else:
+                        return function_result
 
                 # Generate follow-up response
-                response = await self.response_adapter.submit_response(self.client, contents, config, model)
+                if self.response_adapter:
+                  response = await self.response_adapter.submit_response(self.client, contents, config, model)
                 
                 output = response.text.strip() if response.text else None
 
@@ -69,6 +78,7 @@ class ResponseProcessor:
     
     async def _process_reaction_selection(self, function_result: Dict[str, Any], prev_messages: List[Content]) -> tuple[Optional[Dict[str, Any]], bool, Any]:
         """Process reaction selection using AI."""        
+        from buspal_backend.utils.helpers import parse_gemini_message
         reactions = function_result["reactions"]
         reaction_type = function_result["reaction_type"]
         contents = function_result["contents"]

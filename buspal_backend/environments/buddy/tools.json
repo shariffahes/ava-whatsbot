@@ -59,7 +59,8 @@
      "name": "get_scheduled_reminders",
      "description": "Get the active scheduled reminders when asked for it.",
      "parameters": {
-         "type": "object"
+        "type": "object",
+        "properties": {}
      }
   },
   {
@@ -109,7 +110,8 @@
      "name": "calculate_expense_settlement",
      "description": "Calculate optimal settlements showing who should pay whom. Use this when members ask 'how much do I owe?', 'let's settle up', or 'who owes money?'.",
      "parameters": {
-         "type": "object"
+         "type": "object",
+         "properties": {}
      }
   },
   {
